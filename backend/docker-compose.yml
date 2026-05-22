@@ -1,52 +1,33 @@
+# PCB缺陷检测系统 - Docker Compose配置
 version: '3.8'
 
 services:
+  # 后端API服务
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pcb-detection-backend
     ports:
       - "8000:8000"
+    volumes:
+      # 挂载模型目录
+      - ./models:/app/models
+      # 挂载静态文件目录
+      - ./static:/app/static
     environment:
-      - DB_HOST=postgres
-      - MINIO_HOST=minio
-      - REDIS_HOST=redis
-    depends_on:
-      - postgres
-      - minio
-      - redis
-    volumes:
-      - .:/app
+      - PORT=8000
+      - HOST=0.0.0.0
+    restart: unless-stopped
+    networks:
+      - pcb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_USER=rsod_user
-      - POSTGRES_PASSWORD=rsod_password
-      - POSTGRES_DB=rsod_platform
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=minio_password
-    volumes:
-      - minio_data:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-
-volumes:
-  postgres_data:
-  minio_data:
-  redis_data:
+networks:
+  pcb-network:
+    driver: bridge

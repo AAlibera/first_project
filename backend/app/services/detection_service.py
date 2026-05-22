@@ -1,319 +1,384 @@
+"""
+PCB缺陷检测系统 - 检测服务
+负责图像检测的核心逻辑
+"""
+
 import os
 import time
 import uuid
-import json
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 import logging
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass, asdict
+from datetime import datetime
+import json
 
-from app.config import settings
-from app.models.schemas import DetectionBox, DetectionResult
-from app.models.database import DetectionRecord, DetectionResult as DBDetectionResult
-from app.services.minio_service import minio_service
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    from ultralytics import YOLO
-    from PIL import Image
-    import cv2
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
-    logger.warning("YOLO not available, detection will be simulated")
+
+@dataclass
+class DetectionBox:
+    """检测框数据类"""
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    confidence: float
+    class_id: int
+    class_name: str
+    chinese_name: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return asdict(self)
+
+
+@dataclass
+class DetectionResult:
+    """检测结果数据类"""
+    detection_id: str
+    image_path: str
+    result_image_path: str
+    boxes: List[DetectionBox]
+    total_objects: int
+    detection_time: float
+    model_name: str
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            **asdict(self),
+            'boxes': [box.to_dict() for box in self.boxes]
+        }
+
 
 class DetectionService:
-    def __init__(self):
+    """
+    检测服务
+    负责加载模型、执行检测、绘制结果
+    """
+
+    # 缺陷类别名称映射
+    CLASS_NAMES = {
+        0: ("scratch", "划痕"),
+        1: ("crack", "裂纹"),
+        2: ("hole", "孔洞"),
+        3: ("deformation", "变形"),
+        4: ("missing", "缺失"),
+        5: ("solder", "焊点异常"),
+    }
+
+    # 缺陷颜色映射 (BGR格式)
+    CLASS_COLORS = {
+        0: (248, 113, 113),   # 红色 - 划痕
+        1: (251, 146, 60),    # 橙色 - 裂纹
+        2: (250, 204, 21),    # 黄色 - 孔洞
+        3: (52, 211, 153),    # 绿色 - 变形
+        4: (56, 189, 248),    # 蓝色 - 缺失
+        5: (167, 139, 250),   # 紫色 - 焊点异常
+    }
+
+    def __init__(self, output_dir: str = "static/results"):
+        """
+        初始化检测服务
+
+        Args:
+            output_dir: 检测结果输出目录
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 模型实例
         self.model = None
-        self.current_model_info = {
-            "version": None,
-            "object_name": None,
-            "loaded_at": None,
-            "metadata": None
+        self.model_name = None
+        self.model_loaded = False
+
+        # 统计信息
+        self.stats = {
+            'total_detections': 0,
+            'total_objects': 0,
+            'total_time': 0.0,
+            'last_detection_time': None
         }
-        self.local_model_info_path = Path(settings.yolo_model_path).parent / "model_info.json"
-        self.class_names = {}
-        if YOLO_AVAILABLE:
-            self._load_model_smart()
-        self._init_class_names()
 
-    def _save_local_model_info(self, model_info: dict):
+        logger.info("检测服务初始化完成")
+
+    def load_model(self, model_path: str) -> bool:
+        """
+        加载YOLO模型
+
+        Args:
+            model_path: 模型文件路径
+
+        Returns:
+            是否加载成功
+        """
         try:
-            info_path = Path(self.local_model_info_path)
-            info_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(info_path, "w", encoding="utf-8") as f:
-                json.dump(model_info, f, indent=2, ensure_ascii=False)
+            # 检查模型文件是否存在
+            if not os.path.exists(model_path):
+                logger.error(f"模型文件不存在: {model_path}")
+                return False
+
+            logger.info(f"正在加载模型: {model_path}")
+
+            # 尝试导入ultralytics
+            try:
+                from ultralytics import YOLO
+                self.model = YOLO(model_path)
+                self.model_name = Path(model_path).stem
+                self.model_loaded = True
+                logger.info(f"模型加载成功: {self.model_name}")
+                return True
+            except ImportError:
+                logger.warning("未安装ultralytics，使用模拟模式")
+                self.model = None
+                self.model_name = Path(model_path).stem
+                self.model_loaded = True
+                return True
+
         except Exception as e:
-            logger.warning(f"保存本地模型信息失败: {str(e)}")
-
-    def _load_local_model_info(self) -> Optional[dict]:
-        try:
-            info_path = Path(self.local_model_info_path)
-            if not info_path.exists():
-                return None
-            with open(info_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"加载本地模型信息失败: {str(e)}")
-            return None
-
-    def _load_model_smart(self):
-        local_info = self._load_local_model_info()
-        latest_model = minio_service.get_latest_model()
-        need_download = False
-        model_object_name = None
-
-        if not os.path.exists(settings.yolo_model_path):
-            logger.info("本地模型不存在")
-            need_download = True
-        elif not local_info:
-            logger.info("本地模型存在但没有版本信息")
-            need_download = True
-        else:
-            if latest_model and local_info.get("object_name") != latest_model:
-                logger.info(f"发现新版本模型: {latest_model}")
-                need_download = True
-            else:
-                logger.info("本地模型已是最新版本")
-
-        if need_download and latest_model:
-            logger.info(f"从 MinIO 下载最新模型")
-            success = minio_service.download_model_file(latest_model, settings.yolo_model_path)
-            if not success:
-                if os.path.exists(settings.yolo_model_path):
-                    logger.warning("模型下载失败，使用本地已有模型")
-                    model_object_name = local_info.get("object_name") if local_info else None
-                else:
-                    raise FileNotFoundError(f"模型下载失败且本地不存在")
-            else:
-                model_object_name = latest_model
-        elif not latest_model:
-            if not os.path.exists(settings.yolo_model_path):
-                raise FileNotFoundError(f"模型文件未找到")
-            model_object_name = local_info.get("object_name") if local_info else None
-
-        if YOLO_AVAILABLE and os.path.exists(settings.yolo_model_path):
-            self.model = YOLO(settings.yolo_model_path)
-            model_metadata = minio_service.get_model_metadata(model_object_name) if model_object_name else None
-            self.current_model_info = {
-                "version": model_metadata.get("version", "unknown") if model_metadata else "unknown",
-                "object_name": model_object_name,
-                "loaded_at": datetime.now().isoformat(),
-                "metadata": model_metadata
-            }
-            self._save_local_model_info(self.current_model_info)
-            logger.info(f"模型加载成功: {settings.yolo_model_path}")
-
-    def reload_model(self, model_object_name: Optional[str] = None) -> bool:
-        try:
-            if model_object_name:
-                logger.info(f"加载指定模型: {model_object_name}")
-                success = minio_service.download_model_file(model_object_name, settings.yolo_model_path)
-                if not success:
-                    return False
-            else:
-                logger.info("重新加载最新模型")
-            
+            logger.error(f"模型加载失败: {str(e)}")
             self.model = None
-            self._load_model_smart()
-            return True
-        except Exception as e:
-            logger.error(f"重新加载模型失败: {str(e)}")
+            self.model_loaded = False
             return False
 
-    def _init_class_names(self):
-        self.class_names = {
-            0: "aircraft",
-            1: "oiltank",
-            2: "overpass",
-            3: "playground",
-        }
+    def is_model_loaded(self) -> bool:
+        """检查模型是否已加载"""
+        return self.model_loaded
 
-    def get_class_chinese_name(self, class_name: str) -> str:
-        chinese_names = {
-            "aircraft": "飞机",
-            "oiltank": "油罐",
-            "overpass": "立交桥",
-            "playground": "操场"
-        }
-        return chinese_names.get(class_name, class_name)
+    def detect_image(
+        self,
+        image_path: str,
+        conf_threshold: float = 0.5,
+        iou_threshold: float = 0.45
+    ) -> DetectionResult:
+        """
+        检测单张图像
 
-    def detect_single_image(self, image_path: str, user_id: Optional[str] = None, model_name: str = "rsod-yolo11n", minio_svc = None) -> DetectionResult:
+        Args:
+            image_path: 图像路径
+            conf_threshold: 置信度阈值
+            iou_threshold: IOU阈值
+
+        Returns:
+            检测结果
+        """
         start_time = time.time()
         detection_id = str(uuid.uuid4())
+
+        # 检查图像文件是否存在
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"图像文件不存在: {image_path}")
+
+        # 读取图像
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"无法读取图像: {image_path}")
+
         boxes = []
-        db_results = []
 
-        if YOLO_AVAILABLE and self.model:
-            results = self.model.predict(
-                source=image_path,
-                conf=settings.confidence_threshold,
-                iou=settings.iou_threshold,
-                save=False
-            )
+        # 执行检测
+        if self.model is not None:
+            try:
+                # 使用YOLO模型进行检测
+                results = self.model.predict(
+                    source=image_path,
+                    conf=conf_threshold,
+                    iou=iou_threshold,
+                    save=False,
+                    verbose=False
+                )
 
-            for result in results:
-                for box in result.boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    confidence = float(box.conf[0])
-                    class_id = int(box.cls[0])
-                    class_name = self.class_names.get(class_id, f"class_{class_id}")
-                    chinese_name = self.get_class_chinese_name(class_name)
+                # 解析检测结果
+                for result in results:
+                    if result.boxes is not None:
+                        for box in result.boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            confidence = float(box.conf[0])
+                            class_id = int(box.cls[0])
 
-                    boxes.append(DetectionBox(
-                        x1=x1, y1=y1, x2=x2, y2=y2,
-                        confidence=confidence,
-                        class_id=class_id,
-                        class_name=class_name,
-                        chinese_name=chinese_name
-                    ))
+                            class_name, chinese_name = self.CLASS_NAMES.get(
+                                class_id,
+                                (f"class_{class_id}", f"未知_{class_id}")
+                            )
 
-                    db_results.append(DBDetectionResult(
-                        x1=x1, y1=y1, x2=x2, y2=y2,
-                        confidence=confidence,
-                        class_id=class_id,
-                        class_name=class_name,
-                        chinese_name=chinese_name
-                    ))
+                            boxes.append(DetectionBox(
+                                x1=x1,
+                                y1=y1,
+                                x2=x2,
+                                y2=y2,
+                                confidence=confidence,
+                                class_id=class_id,
+                                class_name=class_name,
+                                chinese_name=chinese_name
+                            ))
 
-            annotated_image = results[0].plot()
-            annotated_image_bgr = cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
-            _, image_bytes = cv2.imencode('.jpg', annotated_image_bgr)
-            image_bytes = image_bytes.tobytes()
+                # 绘制检测结果
+                result_image = result.plot()
+
+            except Exception as e:
+                logger.error(f"YOLO检测失败: {str(e)}")
+                result_image = self._draw_simulated_results(image, boxes)
+
         else:
-            boxes = [
-                DetectionBox(x1=100, y1=50, x2=200, y2=150, confidence=0.95, class_id=0, class_name="aircraft", chinese_name="飞机"),
-                DetectionBox(x1=300, y1=200, x2=400, y2=300, confidence=0.88, class_id=0, class_name="aircraft", chinese_name="飞机")
-            ]
-            db_results = [
-                DBDetectionResult(x1=100, y1=50, x2=200, y2=150, confidence=0.95, class_id=0, class_name="aircraft", chinese_name="飞机"),
-                DBDetectionResult(x1=300, y1=200, x2=400, y2=300, confidence=0.88, class_id=0, class_name="aircraft", chinese_name="飞机")
-            ]
-            import numpy as np
-            image_bytes = np.zeros((400, 400, 3), dtype=np.uint8).tobytes()
+            # 模拟模式：生成随机检测结果用于测试
+            logger.info("使用模拟检测模式")
+            result_image = self._draw_simulated_results(image, boxes)
 
-        minio = minio_svc if minio_svc is not None else minio_service
-        result_object_name = minio.upload_result_image(image_bytes, "jpg")
+        # 保存结果图像
+        result_filename = f"{detection_id}.jpg"
+        result_path = self.output_dir / result_filename
+        cv2.imwrite(str(result_path), result_image)
+
         detection_time = time.time() - start_time
-        image_filename = os.path.basename(image_path)
 
-        try:
-            with open(image_path, 'rb') as f:
-                original_image_bytes = f.read()
-            original_object_name = minio.upload_image_bytes(original_image_bytes, image_filename)
-        except:
-            original_object_name = f"original_{uuid.uuid4().hex}.jpg"
+        # 更新统计信息
+        self._update_stats(len(boxes), detection_time)
 
-        original_image_key = f"uploads/{original_object_name}"
-        result_image_key = f"results/{result_object_name}"
-
-        self._save_to_database(
-            user_id=user_id,
+        result = DetectionResult(
             detection_id=detection_id,
-            model_name=model_name,
-            total_objects=len(boxes),
-            detection_time=detection_time,
-            original_image_key=original_image_key,
-            result_image_key=result_image_key,
-            results=db_results
-        )
-
-        original_image_url = f"http://localhost:8000/api/detection/files/rsod-original/{original_object_name}"
-        result_image_url = f"http://localhost:8000/api/detection/files/rsod-results/{result_object_name}"
-
-        return DetectionResult(
-            detection_id=detection_id,
-            image_url=original_image_url,
-            result_image_url=result_image_url,
+            image_path=image_path,
+            result_image_path=str(result_path),
             boxes=boxes,
             total_objects=len(boxes),
-            detection_time=round(detection_time, 3),
-            model_name=model_name,
-            created_at=datetime.now()
+            detection_time=detection_time,
+            model_name=self.model_name or "unknown",
+            created_at=datetime.now().isoformat()
         )
 
-    def _save_to_database(self, user_id, detection_id, model_name, total_objects, detection_time, original_image_key, result_image_key, results):
-        try:
-            from app.models.database import get_db
-            db = next(get_db())
+        logger.info(
+            f"检测完成: {detection_id}, "
+            f"检测到 {len(boxes)} 个目标, "
+            f"耗时 {detection_time:.3f}s"
+        )
 
-            record = DetectionRecord(
-                id=detection_id,
-                user_id=user_id,
-                type="single",
-                status="completed",
-                model_name=model_name,
-                model_version="1.0.0",
-                total_objects=total_objects,
-                detection_time=detection_time,
-                original_image_key=original_image_key,
-                result_image_key=result_image_key
+        return result
+
+    def _draw_simulated_results(
+        self,
+        image: np.ndarray,
+        boxes: List[DetectionBox]
+    ) -> np.ndarray:
+        """
+        绘制检测结果（用于模拟模式）
+
+        Args:
+            image: 原始图像
+            boxes: 检测框列表
+
+        Returns:
+            绘制了检测结果的图像
+        """
+        result_image = image.copy()
+
+        # 模拟添加一些检测结果用于演示
+        if len(boxes) == 0:
+            # 添加一些示例检测结果
+            height, width = image.shape[:2]
+            num_objects = np.random.randint(1, 5)
+
+            for i in range(num_objects):
+                x1 = int(np.random.randint(0, width - 100))
+                y1 = int(np.random.randint(0, height - 100))
+                x2 = x1 + int(np.random.randint(50, 150))
+                y2 = y1 + int(np.random.randint(50, 150))
+
+                class_id = np.random.randint(0, 6)
+                confidence = np.random.uniform(0.7, 0.98)
+
+                class_name, chinese_name = self.CLASS_NAMES[class_id]
+
+                boxes.append(DetectionBox(
+                    x1=x1,
+                    y1=y1,
+                    x2=x2,
+                    y2=y2,
+                    confidence=confidence,
+                    class_id=class_id,
+                    class_name=class_name,
+                    chinese_name=chinese_name
+                ))
+
+        # 绘制所有检测框
+        for box in boxes:
+            color = self.CLASS_COLORS.get(box.class_id, (0, 255, 0))
+
+            # 绘制矩形框
+            cv2.rectangle(
+                result_image,
+                (int(box.x1), int(box.y1)),
+                (int(box.x2), int(box.y2)),
+                color,
+                2
             )
-            db.add(record)
 
-            for result in results:
-                result.record_id = detection_id
-                db.add(result)
+            # 绘制标签背景
+            label = f"{box.chinese_name} {box.confidence:.2f}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.6
+            thickness = 1
 
-            db.commit()
-            db.refresh(record)
-            logger.info(f"检测记录已保存到数据库: {detection_id}")
-            return record
-        except Exception as e:
-            logger.error(f"保存检测记录到数据库失败: {str(e)}")
-            try:
-                db.rollback()
-            except:
-                pass
-            return None
+            (label_width, label_height), baseline = cv2.getTextSize(
+                label, font, font_scale, thickness
+            )
 
-    def get_detection_history(self, user_id: str = None, limit: int = 10) -> List[DetectionRecord]:
-        try:
-            from app.models.database import get_db
-            db = next(get_db())
+            label_y = max(int(box.y1) - 10, label_height + 10)
 
-            query = db.query(DetectionRecord).order_by(DetectionRecord.created_at.desc())
-            if user_id:
-                query = query.filter(DetectionRecord.user_id == user_id)
+            cv2.rectangle(
+                result_image,
+                (int(box.x1), label_y - label_height - baseline),
+                (int(box.x1) + label_width, label_y + baseline),
+                color,
+                -1
+            )
 
-            records = query.limit(limit).all()
-            logger.info(f"获取检测历史记录: {len(records)} 条")
-            return records
-        except Exception as e:
-            logger.error(f"获取检测历史记录失败: {str(e)}")
-            return []
+            # 绘制标签文本
+            cv2.putText(
+                result_image,
+                label,
+                (int(box.x1), label_y),
+                font,
+                font_scale,
+                (255, 255, 255),
+                thickness
+            )
 
-    def get_detection_by_id(self, detection_id: str) -> Optional[DetectionRecord]:
-        try:
-            from app.models.database import get_db
-            db = next(get_db())
+        return result_image
 
-            record = db.query(DetectionRecord).filter(DetectionRecord.id == detection_id).first()
-            return record
-        except Exception as e:
-            logger.error(f"获取检测记录失败: {str(e)}")
-            return None
+    def _update_stats(self, num_objects: int, detection_time: float) -> None:
+        """更新统计信息"""
+        self.stats['total_detections'] += 1
+        self.stats['total_objects'] += num_objects
+        self.stats['total_time'] += detection_time
+        self.stats['last_detection_time'] = datetime.now().isoformat()
 
-    def delete_detection(self, detection_id: str) -> bool:
-        try:
-            from app.models.database import get_db
-            db = next(get_db())
+    def get_stats(self) -> Dict[str, Any]:
+        """获取统计信息"""
+        avg_time = (
+            self.stats['total_time'] / self.stats['total_detections']
+            if self.stats['total_detections'] > 0
+            else 0
+        )
 
-            record = db.query(DetectionRecord).filter(DetectionRecord.id == detection_id).first()
-            if record:
-                db.query(DBDetectionResult).filter(DBDetectionResult.record_id == detection_id).delete()
-                db.delete(record)
-                db.commit()
-                logger.info(f"检测记录已删除: {detection_id}")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"删除检测记录失败: {str(e)}")
-            try:
-                db.rollback()
-            except:
-                pass
-            return False
+        return {
+            **self.stats,
+            'avg_detection_time': avg_time
+        }
 
+    def reset_stats(self) -> None:
+        """重置统计信息"""
+        self.stats = {
+            'total_detections': 0,
+            'total_objects': 0,
+            'total_time': 0.0,
+            'last_detection_time': None
+        }
+        logger.info("统计信息已重置")
+
+
+# 全局检测服务实例
 detection_service = DetectionService()

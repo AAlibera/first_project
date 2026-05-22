@@ -1,5 +1,5 @@
 {
-  "name": "rsod-frontend",
+  "name": "pcb-defect-detection",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -10,9 +10,8 @@
   },
   "dependencies": {
     "vue": "^3.4.21",
-    "vue-router": "^4.3.0",
     "axios": "^1.6.7",
-    "lucide-vue-next": "^0.31.1"
+    "lucide-vue-next": "^0.344.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

@@ -1,18 +1,16 @@
 import axios from 'axios'
 import type {
-  SingleDetectionResponse,
-  HistoryResponse,
+  DetectionResponse,
+  BatchDetectionResponse,
   TargetListResponse,
   ModelListResponse,
   CurrentModelResponse,
-  UserRegisterRequest,
-  UserLoginRequest,
-  UserResponse
+  DetectionStatsResponse
 } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000
+  timeout: 120000
 })
 
 api.interceptors.response.use(
@@ -24,7 +22,7 @@ api.interceptors.response.use(
 )
 
 export const detectionApi = {
-  detectSingle: async (file: File, modelName?: string): Promise<SingleDetectionResponse> => {
+  detectSingle: async (file: File, modelName?: string): Promise<DetectionResponse> => {
     const formData = new FormData()
     formData.append('file', file)
     if (modelName) {
@@ -35,55 +33,50 @@ export const detectionApi = {
     })
     return response.data
   },
-  
-  getHistory: async (page = 1, pageSize = 10): Promise<HistoryResponse> => {
-    const response = await api.get('/detection/history', {
-      params: { page, page_size: pageSize }
+
+  detectBatch: async (files: File[], modelName?: string): Promise<BatchDetectionResponse> => {
+    const formData = new FormData()
+    files.forEach((file, index) => {
+      formData.append(`file_${index}`, file)
+    })
+    if (modelName) {
+      formData.append('model_name', modelName)
+    }
+    const response = await api.post('/detection/batch', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
     })
     return response.data
   },
-  
-  getDetectionById: async (id: string): Promise<SingleDetectionResponse> => {
-    const response = await api.get(`/detection/${id}`)
-    return response.data
-  },
-  
-  deleteDetection: async (id: string): Promise<{ success: boolean; message: string }> => {
-    const response = await api.delete(`/detection/${id}`)
-    return response.data
-  },
-  
+
   getTargets: async (): Promise<TargetListResponse> => {
     const response = await api.get('/detection/targets/list')
+    return response.data
+  },
+
+  getStats: async (): Promise<DetectionStatsResponse> => {
+    const response = await api.get('/detection/stats')
+    return response.data
+  },
+
+  resetStats: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/detection/stats/reset')
     return response.data
   }
 }
 
 export const modelApi = {
   getList: async (): Promise<ModelListResponse> => {
-    const response = await api.get('/model/list')
+    const response = await api.get('/detection/models/list')
     return response.data
   },
-  
-  getCurrent: async (): Promise<CurrentModelResponse> => {
-    const response = await api.get('/model/current')
-    return response.data
-  },
-  
-  reload: async (objectName?: string): Promise<{ success: boolean; message: string }> => {
-    const response = await api.post('/model/reload', objectName ? { object_name: objectName } : {})
-    return response.data
-  }
-}
 
-export const userApi = {
-  register: async (data: UserRegisterRequest): Promise<UserResponse> => {
-    const response = await api.post('/user/register', data)
+  getCurrent: async (): Promise<CurrentModelResponse> => {
+    const response = await api.get('/detection/models/current')
     return response.data
   },
-  
-  login: async (data: UserLoginRequest): Promise<UserResponse> => {
-    const response = await api.post('/user/login', data)
+
+  switch: async (modelName: string): Promise<CurrentModelResponse> => {
+    const response = await api.post('/detection/models/switch', { model_name: modelName })
     return response.data
   }
 }

@@ -1,163 +1,152 @@
+"""
+PCB缺陷检测系统 - 检测API路由
+提供图像检测相关的API接口
+"""
+
 import os
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Path, Response
-from fastapi.responses import StreamingResponse
+import logging
+from typing import Optional
+from pathlib import Path
+
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 
 from app.services.detection_service import detection_service
-from app.services.minio_service import minio_service
-from app.utils.file_utils import save_upload_file, ensure_directories
-from app.config import settings
-from app.models.schemas import (
-    SingleDetectionResponse, HistoryResponse, TargetListResponse,
-    TargetItem, HistoryItem, DetectionResult, DetectionBox
+from app.services.model_manager import model_manager
+from app.schemas import (
+    DetectionResponse,
+    DetectionResultData,
+    DetectionBoxData,
+    TargetListResponse,
+    TargetItem,
+    ModelListResponse,
+    ModelItem,
+    CurrentModelResponse,
+    DetectionStatsResponse,
+    SuccessResponse,
+    ErrorResponse
 )
-from app.models.database import DetectionRecord
 
-router = APIRouter(prefix="/detection", tags=["detection"])
-ensure_directories()
+logger = logging.getLogger(__name__)
 
-@router.post("/single", response_model=SingleDetectionResponse)
+router = APIRouter(prefix="/detection", tags=["检测"])
+
+
+# 上传文件保存目录
+UPLOAD_DIR = Path("static/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@router.post("/single", response_model=DetectionResponse)
 async def detect_single_image(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    model_name: str = Form("rsod-yolo11n"),
-    user_id: str = Form(None)
+    model_name: Optional[str] = Form(None),
+    conf_threshold: Optional[float] = Form(0.5),
+    iou_threshold: Optional[float] = Form(0.45)
 ):
+    """
+    单图检测接口
+
+    上传PCB图像，返回检测结果
+
+    - **file**: PCB图像文件
+    - **model_name**: 模型名称（可选，默认使用当前模型）
+    - **conf_threshold**: 置信度阈值（默认0.5）
+    - **iou_threshold**: IOU阈值（默认0.45）
+    """
     try:
-        os.makedirs(settings.upload_dir, exist_ok=True)
-        filename = await save_upload_file(file, settings.upload_dir)
-        image_path = os.path.join(settings.upload_dir, filename)
+        # 保存上传的文件
+        file_path = UPLOAD_DIR / file.filename
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
 
-        result = detection_service.detect_single_image(image_path, user_id, model_name, minio_service)
+        logger.info(f"接收到图像: {file.filename}, 大小: {len(content)} bytes")
 
-        try:
-            os.remove(image_path)
-        except:
-            pass
+        # 如果指定了模型，切换模型
+        if model_name:
+            model_info = model_manager.get_model(model_name)
+            if not model_info:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"模型不存在: {model_name}"
+                )
 
-        return SingleDetectionResponse(
+            # 检查是否需要重新加载模型
+            current_model = model_manager.get_current_model()
+            if not current_model or current_model.name != model_name:
+                success = model_manager.set_current_model(model_name)
+                if success:
+                    model_info = model_manager.get_model(model_name)
+                    if model_info:
+                        detection_service.load_model(model_info.path)
+
+        # 执行检测
+        result = detection_service.detect_image(
+            str(file_path),
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold
+        )
+
+        # 清理上传的文件
+        background_tasks.add_task(cleanup_file, file_path)
+
+        # 构建响应数据
+        result_data = DetectionResultData(
+            detection_id=result.detection_id,
+            image_url=f"/api/detection/files/{result.image_path}",
+            result_image_url=f"/api/detection/files/{result.result_image_path}",
+            boxes=[
+                DetectionBoxData(
+                    x1=box.x1,
+                    y1=box.y1,
+                    x2=box.x2,
+                    y2=box.y2,
+                    confidence=box.confidence,
+                    class_id=box.class_id,
+                    class_name=box.class_name,
+                    chinese_name=box.chinese_name,
+                    color=get_color_for_class(box.class_id)
+                )
+                for box in result.boxes
+            ],
+            total_objects=result.total_objects,
+            detection_time=result.detection_time,
+            model_name=result.model_name,
+            created_at=result.created_at
+        )
+
+        return DetectionResponse(
             success=True,
             message="检测成功",
-            data=result
+            data=result_data
         )
 
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail="模型文件未找到")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"检测失败: {str(e)}")
-
-@router.get("/history", response_model=HistoryResponse)
-async def get_detection_history(
-    page: int = 1,
-    page_size: int = 10,
-    user_id: str = None
-):
-    try:
-        records = detection_service.get_detection_history(user_id=user_id, limit=page_size * page)
-
-        start = (page - 1) * page_size
-        end = start + page_size
-
-        history_items = []
-        for record in records[start:end]:
-            original_filename = os.path.basename(record.original_image_key) if record.original_image_key else ""
-            result_filename = os.path.basename(record.result_image_key) if record.result_image_key else ""
-
-            image_url = f"http://localhost:8000/api/detection/files/rsod-original/{original_filename}" if original_filename else ""
-            result_url = f"http://localhost:8000/api/detection/files/rsod-results/{result_filename}" if result_filename else ""
-
-            history_items.append(HistoryItem(
-                id=str(record.id),
-                image_url=image_url,
-                result_image_url=result_url,
-                total_objects=record.total_objects or 0,
-                created_at=record.created_at,
-                model_name=record.model_name or "rsod-yolo11n",
-                filename=original_filename or "detection.jpg",
-                status=record.status or "completed",
-                type=record.type or "single",
-                time=record.created_at.strftime("%Y-%m-%d %H:%M") if record.created_at else "",
-                count=1,
-                detected_targets=[]
-            ))
-
-        return HistoryResponse(
-            success=True,
-            message="获取成功",
-            data=history_items,
-            total=len(records)
+        logger.error(f"检测失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"检测失败: {str(e)}"
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, message="获取历史记录失败", detail=str(e))
-
-@router.get("/{detection_id}", response_model=SingleDetectionResponse)
-async def get_detection_by_id(detection_id: str = Path(..., description="检测记录 ID")):
-    try:
-        record = detection_service.get_detection_by_id(detection_id)
-
-        if not record:
-            raise HTTPException(status_code=404, message="检测记录不存在")
-
-        original_filename = os.path.basename(record.original_image_key) if record.original_image_key else ""
-        result_filename = os.path.basename(record.result_image_key) if record.result_image_key else ""
-
-        image_url = f"http://localhost:8000/api/detection/files/rsod-original/{original_filename}" if original_filename else ""
-        result_url = f"http://localhost:8000/api/detection/files/rsod-results/{result_filename}" if result_filename else ""
-
-        boxes = []
-        if hasattr(record, 'results') and record.results:
-            for result in record.results:
-                boxes.append(DetectionBox(
-                    x1=result.x1, y1=result.y1, x2=result.x2, y2=result.y2,
-                    confidence=result.confidence,
-                    class_id=result.class_id,
-                    class_name=result.class_name,
-                    chinese_name=result.chinese_name
-                ))
-
-        detection_result = DetectionResult(
-            detection_id=str(record.id),
-            image_url=image_url,
-            result_image_url=result_url,
-            boxes=boxes,
-            total_objects=record.total_objects or 0,
-            detection_time=record.detection_time or 0,
-            model_name=record.model_name or "rsod-yolo11n",
-            created_at=record.created_at
-        )
-
-        return SingleDetectionResponse(
-            success=True,
-            message="获取成功",
-            data=detection_result
-        )
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, message="获取检测记录失败", detail=str(e))
-
-@router.delete("/{detection_id}")
-async def delete_detection(detection_id: str = Path(..., description="检测记录 ID")):
-    try:
-        success = detection_service.delete_detection(detection_id)
-
-        if not success:
-            raise HTTPException(status_code=404, message="检测记录不存在")
-
-        return {"success": True, "message": "删除成功"}
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, message="删除检测记录失败", detail=str(e))
 
 @router.get("/targets/list", response_model=TargetListResponse)
 async def get_target_list():
+    """
+    获取支持的检测目标类型列表
+
+    返回系统支持的所有PCB缺陷类型
+    """
     targets = [
-        TargetItem(id=0, name="aircraft", chinese_name="飞机", description="固定翼飞机、直升机等"),
-        TargetItem(id=1, name="oiltank", chinese_name="油罐", description="储油罐、化工罐等"),
-        TargetItem(id=2, name="overpass", chinese_name="立交桥", description="各类立交桥"),
-        TargetItem(id=3, name="playground", chinese_name="操场", description="运动场、操场等"),
+        TargetItem(id=0, name="scratch", chinese_name="划痕", description="PCB板表面划痕", color="#f87171"),
+        TargetItem(id=1, name="crack", chinese_name="裂纹", description="PCB板表面裂纹", color="#fb923c"),
+        TargetItem(id=2, name="hole", chinese_name="孔洞", description="PCB板表面孔洞缺陷", color="#facc15"),
+        TargetItem(id=3, name="deformation", chinese_name="变形", description="PCB板变形缺陷", color="#34d399"),
+        TargetItem(id=4, name="missing", chinese_name="缺失", description="元器件缺失", color="#38bdf8"),
+        TargetItem(id=5, name="solder", chinese_name="焊点异常", description="焊接点质量问题", color="#a78bfa"),
     ]
 
     return TargetListResponse(
@@ -166,29 +155,216 @@ async def get_target_list():
         data=targets
     )
 
-@router.get("/files/{bucket}/{filename}", response_class=Response)
-def get_file(bucket: str, filename: str):
-    try:
-        response = minio_service.client.get_object(bucket, filename)
 
-        content_type = "image/jpeg"
-        if filename.endswith(".png"):
-            content_type = "image/png"
-        elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
-            content_type = "image/jpeg"
+@router.get("/stats", response_model=DetectionStatsResponse)
+async def get_detection_stats():
+    """
+    获取检测统计信息
 
-        data = response.read()
-        response.close()
-        response.release_conn()
+    返回系统的检测统计数据
+    """
+    stats = detection_service.get_stats()
 
-        return Response(
-            content=data,
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f'inline; filename="{filename}"',
-                "Content-Length": str(len(data))
-            }
+    return DetectionStatsResponse(
+        success=True,
+        message="获取成功",
+        data=stats
+    )
+
+
+@router.post("/stats/reset", response_model=SuccessResponse)
+async def reset_detection_stats():
+    """
+    重置检测统计信息
+    """
+    detection_service.reset_stats()
+
+    return SuccessResponse(
+        success=True,
+        message="统计信息已重置"
+    )
+
+
+@router.get("/models/list", response_model=ModelListResponse)
+async def get_model_list():
+    """
+    获取模型列表
+
+    返回所有可用的检测模型
+    """
+    # 扫描模型目录
+    models = model_manager.scan_models()
+
+    model_items = [
+        ModelItem(
+            name=model.name,
+            version=model.version,
+            status=model.status.value,
+            path=model.path,
+            description=model.description,
+            class_names=model.class_names,
+            created_at=model.created_at,
+            last_used=model.last_used
+        )
+        for model in models
+    ]
+
+    return ModelListResponse(
+        success=True,
+        message="获取成功",
+        data=model_items
+    )
+
+
+@router.get("/models/current", response_model=CurrentModelResponse)
+async def get_current_model():
+    """
+    获取当前使用的模型
+
+    返回当前正在使用的检测模型信息
+    """
+    model = model_manager.get_current_model()
+
+    if not model:
+        raise HTTPException(
+            status_code=404,
+            detail="未设置当前模型"
         )
 
+    return CurrentModelResponse(
+        success=True,
+        message="获取成功",
+        data=ModelItem(
+            name=model.name,
+            version=model.version,
+            status=model.status.value,
+            path=model.path,
+            description=model.description,
+            class_names=model.class_names,
+            created_at=model.created_at,
+            last_used=model.last_used
+        )
+    )
+
+
+@router.post("/models/switch", response_model=CurrentModelResponse)
+async def switch_model(model_name: str):
+    """
+    切换检测模型
+
+    - **model_name**: 要切换的模型名称
+    """
+    # 获取模型信息
+    model_info = model_manager.get_model(model_name)
+    if not model_info:
+        raise HTTPException(
+            status_code=404,
+            detail=f"模型不存在: {model_name}"
+        )
+
+    # 切换模型
+    success = model_manager.set_current_model(model_name)
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="模型切换失败"
+        )
+
+    # 加载模型
+    load_success = detection_service.load_model(model_info.path)
+    if not load_success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"模型加载失败: {model_name}"
+        )
+
+    # 获取更新后的模型信息
+    model = model_manager.get_model(model_name)
+
+    return CurrentModelResponse(
+        success=True,
+        message="模型切换成功",
+        data=ModelItem(
+            name=model.name,
+            version=model.version,
+            status=model.status.value,
+            path=model.path,
+            description=model.description,
+            class_names=model.class_names,
+            created_at=model.created_at,
+            last_used=model.last_used
+        )
+    )
+
+
+@router.get("/files/{file_path:path}", response_class=FileResponse)
+async def get_detection_file(file_path: str):
+    """
+    获取检测结果文件
+
+    - **file_path**: 文件路径
+    """
+    file_full_path = Path(file_path)
+
+    if not file_full_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="文件不存在"
+        )
+
+    # 确定内容类型
+    suffix = file_full_path.suffix.lower()
+    media_types = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.bmp': 'image/bmp'
+    }
+
+    return FileResponse(
+        path=str(file_full_path),
+        media_type=media_types.get(suffix, 'application/octet-stream'),
+        filename=file_full_path.name
+    )
+
+
+@router.get("/health")
+async def health_check():
+    """
+    健康检查接口
+
+    返回系统健康状态
+    """
+    model_loaded = detection_service.is_model_loaded()
+    current_model = model_manager.get_current_model()
+
+    return {
+        "status": "healthy",
+        "model_loaded": model_loaded,
+        "current_model": current_model.name if current_model else None,
+        "service": "detection"
+    }
+
+
+def get_color_for_class(class_id: int) -> str:
+    """获取类别对应的颜色"""
+    colors = {
+        0: "#f87171",  # 红色
+        1: "#fb923c",  # 橙色
+        2: "#facc15",  # 黄色
+        3: "#34d399",  # 绿色
+        4: "#38bdf8",  # 蓝色
+        5: "#a78bfa",  # 紫色
+    }
+    return colors.get(class_id, "#10b981")
+
+
+def cleanup_file(file_path: Path):
+    """清理上传的文件"""
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            logger.info(f"已清理临时文件: {file_path}")
     except Exception as e:
-        raise HTTPException(status_code=404, message="文件未找到", detail=f"{type(e).__name__}: {str(e)}")
+        logger.error(f"清理文件失败: {str(e)}")

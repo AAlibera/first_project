@@ -1,13 +1,26 @@
+# PCB缺陷检测系统 - Python依赖
+
+# Web框架
 fastapi==0.110.0
-uvicorn==0.27.1
-sqlalchemy==2.0.27
-psycopg2-binary==2.9.9
+uvicorn[standard]==0.27.1
+
+# 数据验证
 pydantic==2.6.1
-python-dotenv==1.0.0
-minio==7.2.15
-ultralytics==8.1.32
-pillow==10.2.0
+
+# 计算机视觉
 opencv-python==4.9.0.80
-passlib==1.7.4
-python-jose[cryptography]==3.3.0
-bcrypt==4.1.2
+numpy==1.26.4
+
+# AI模型 (可选，未安装时使用模拟模式)
+# ultralytics==8.1.40
+# torch==2.2.0
+# torchvision==0.17.0
+
+# 图像处理
+pillow==10.2.0
+
+# 日志
+python-multipart==0.0.9
+
+# 开发工具
+python-dotenv==1.0.1

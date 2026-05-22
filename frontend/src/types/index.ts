@@ -6,7 +6,8 @@ export interface DetectionBox {
   confidence: number
   class_id: number
   class_name: string
-  chinese_name: string | null
+  chinese_name: string
+  color: string
 }
 
 export interface DetectionResult {
@@ -20,32 +21,28 @@ export interface DetectionResult {
   created_at: string
 }
 
-export interface SingleDetectionResponse {
+export interface DetectionResponse {
   success: boolean
   message: string
   data: DetectionResult | null
 }
 
-export interface HistoryItem {
-  id: string
-  image_url: string
-  result_image_url: string
-  total_objects: number
-  created_at: string
-  model_name: string
-  filename: string
-  status: string
-  type: string
-  time: string
-  count: number
-  detected_targets: string[]
+export interface BatchDetectionResult {
+  total: number
+  success: number
+  failed: number
+  items: Array<{
+    filename: string
+    success: boolean
+    result?: DetectionResult
+    error?: string
+  }>
 }
 
-export interface HistoryResponse {
+export interface BatchDetectionResponse {
   success: boolean
   message: string
-  data: HistoryItem[]
-  total: number
+  data: BatchDetectionResult | null
 }
 
 export interface TargetItem {
@@ -53,6 +50,7 @@ export interface TargetItem {
   name: string
   chinese_name: string
   description: string | null
+  color: string
 }
 
 export interface TargetListResponse {
@@ -61,55 +59,37 @@ export interface TargetListResponse {
   data: TargetItem[]
 }
 
-export interface ModelMetadata {
+export interface ModelItem {
   name: string
   version: string
-  created_at: string
+  status: string
+  path: string | null
   description: string | null
-  metrics: Record<string, unknown> | null
-  config: Record<string, unknown> | null
-}
-
-export interface ModelItem {
-  object_name: string
-  metadata: ModelMetadata | null
-  public_url: string
+  class_names: string[] | null
+  created_at: string | null
+  last_used: string | null
 }
 
 export interface ModelListResponse {
   success: boolean
   message: string
   data: ModelItem[]
-  latest: ModelItem | null
 }
 
 export interface CurrentModelResponse {
   success: boolean
   message: string
-  data: ModelItem
+  data: ModelItem | null
 }
 
-export interface UserRegisterRequest {
-  username: string
-  email: string
-  password: string
-  nickname?: string
-}
-
-export interface UserLoginRequest {
-  username: string
-  password: string
-}
-
-export interface UserResponse {
+export interface DetectionStatsResponse {
   success: boolean
   message: string
   data: {
-    id: string
-    username: string
-    email: string
-    nickname: string
-    role: string
-    avatar_url?: string
-  } | null
+    total_detections: number
+    total_objects: number
+    total_time: number
+    avg_detection_time: number
+    last_detection_time: string | null
+  }
 }
