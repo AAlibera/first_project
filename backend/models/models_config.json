@@ -1,0 +1,40 @@
+{
+  "best": {
+    "name": "best",
+    "path": "backend/models/best.pt",
+    "version": "1.0.0",
+    "status": "unloaded",
+    "description": "模型文件: best.pt",
+    "created_at": "2026-05-25T01:37:42.977600",
+    "metrics": {},
+    "config": {},
+    "last_used": "2026-05-25T01:47:59.834895",
+    "class_names": [
+      "scratch",
+      "crack",
+      "hole",
+      "deformation",
+      "missing",
+      "solder"
+    ]
+  },
+  "best_2.0.0_20260526": {
+    "name": "best_2.0.0_20260526",
+    "path": "backend/models/best_2.0.0_20260526.pt",
+    "version": "1.0.0",
+    "status": "unloaded",
+    "description": "模型文件: best_2.0.0_20260526.pt",
+    "created_at": "2026-05-26T03:11:02.772981",
+    "metrics": {},
+    "config": {},
+    "last_used": "2026-05-26T06:05:58.306879",
+    "class_names": [
+      "scratch",
+      "crack",
+      "hole",
+      "deformation",
+      "missing",
+      "solder"
+    ]
+  }
+}

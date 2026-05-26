@@ -1,10 +1,10 @@
 """
 PCB缺陷检测系统 - 检测API路由
-提供图像检测相关的API接口
+
+提供图像检测相关的API接口。
+采用统一日志模块和路径管理模块。
 """
 
-import os
-import logging
 from typing import Optional
 from pathlib import Path
 
@@ -26,15 +26,12 @@ from app.schemas import (
     SuccessResponse,
     ErrorResponse
 )
+from app.utils.paths import Paths
+from app.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/detection", tags=["检测"])
-
-
-# 上传文件保存目录
-UPLOAD_DIR = Path("static/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/single", response_model=DetectionResponse)
@@ -56,15 +53,15 @@ async def detect_single_image(
     - **iou_threshold**: IOU阈值（默认0.45）
     """
     try:
-        # 保存上传的文件
-        file_path = UPLOAD_DIR / file.filename
+        Paths.ensure_dir(Paths.uploads())
+        
+        file_path = Paths.uploads() / file.filename
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
 
         logger.info(f"接收到图像: {file.filename}, 大小: {len(content)} bytes")
 
-        # 如果指定了模型，切换模型
         if model_name:
             model_info = model_manager.get_model(model_name)
             if not model_info:
@@ -73,7 +70,6 @@ async def detect_single_image(
                     detail=f"模型不存在: {model_name}"
                 )
 
-            # 检查是否需要重新加载模型
             current_model = model_manager.get_current_model()
             if not current_model or current_model.name != model_name:
                 success = model_manager.set_current_model(model_name)
@@ -82,17 +78,14 @@ async def detect_single_image(
                     if model_info:
                         detection_service.load_model(model_info.path)
 
-        # 执行检测
         result = detection_service.detect_image(
             str(file_path),
             conf_threshold=conf_threshold,
             iou_threshold=iou_threshold
         )
 
-        # 清理上传的文件
         background_tasks.add_task(cleanup_file, file_path)
 
-        # 构建响应数据
         result_data = DetectionResultData(
             detection_id=result.detection_id,
             image_url=f"/api/detection/files/{result.image_path}",
@@ -126,7 +119,7 @@ async def detect_single_image(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"检测失败: {str(e)}")
+        logger.error(f"检测失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"检测失败: {str(e)}"
@@ -192,7 +185,6 @@ async def get_model_list():
 
     返回所有可用的检测模型
     """
-    # 扫描模型目录
     models = model_manager.scan_models()
 
     model_items = [
@@ -254,7 +246,6 @@ async def switch_model(model_name: str):
 
     - **model_name**: 要切换的模型名称
     """
-    # 获取模型信息
     model_info = model_manager.get_model(model_name)
     if not model_info:
         raise HTTPException(
@@ -262,7 +253,6 @@ async def switch_model(model_name: str):
             detail=f"模型不存在: {model_name}"
         )
 
-    # 切换模型
     success = model_manager.set_current_model(model_name)
     if not success:
         raise HTTPException(
@@ -270,7 +260,6 @@ async def switch_model(model_name: str):
             detail="模型切换失败"
         )
 
-    # 加载模型
     load_success = detection_service.load_model(model_info.path)
     if not load_success:
         raise HTTPException(
@@ -278,7 +267,6 @@ async def switch_model(model_name: str):
             detail=f"模型加载失败: {model_name}"
         )
 
-    # 获取更新后的模型信息
     model = model_manager.get_model(model_name)
 
     return CurrentModelResponse(
@@ -302,17 +290,17 @@ async def get_detection_file(file_path: str):
     """
     获取检测结果文件
 
-    - **file_path**: 文件路径
+    - **file_path**: 文件路径（相对于项目根目录）
     """
-    file_full_path = Path(file_path)
+    file_full_path = Paths.root() / file_path
 
     if not file_full_path.exists():
+        logger.error(f"文件不存在: {file_full_path}")
         raise HTTPException(
             status_code=404,
             detail="文件不存在"
         )
 
-    # 确定内容类型
     suffix = file_full_path.suffix.lower()
     media_types = {
         '.jpg': 'image/jpeg',
@@ -350,12 +338,12 @@ async def health_check():
 def get_color_for_class(class_id: int) -> str:
     """获取类别对应的颜色"""
     colors = {
-        0: "#f87171",  # 红色
-        1: "#fb923c",  # 橙色
-        2: "#facc15",  # 黄色
-        3: "#34d399",  # 绿色
-        4: "#38bdf8",  # 蓝色
-        5: "#a78bfa",  # 紫色
+        0: "#f87171",
+        1: "#fb923c",
+        2: "#facc15",
+        3: "#34d399",
+        4: "#38bdf8",
+        5: "#a78bfa",
     }
     return colors.get(class_id, "#10b981")
 

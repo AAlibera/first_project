@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: pcb-detection-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/logs:/app/backend/logs
+      - ./backend/static:/app/backend/static
+      - ./backend/models:/app/backend/models
+      - ./backend/data:/app/backend/data
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+    restart: unless-stopped
+    networks:
+      - pcb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: pcb-detection-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - pcb-network
+    restart: unless-stopped
+
+networks:
+  pcb-network:
+    driver: bridge
