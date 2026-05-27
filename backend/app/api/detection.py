@@ -5,8 +5,11 @@ PCB缺陷检测系统 - 检测API路由
 采用统一日志模块和路径管理模块。
 """
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pathlib import Path
+import base64
+import io
+import uuid
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -240,7 +243,7 @@ async def get_current_model():
 
 
 @router.post("/models/switch", response_model=CurrentModelResponse)
-async def switch_model(model_name: str):
+async def switch_model(model_name: str = Form(...)):
     """
     切换检测模型
 
@@ -356,3 +359,193 @@ def cleanup_file(file_path: Path):
             logger.info(f"已清理临时文件: {file_path}")
     except Exception as e:
         logger.error(f"清理文件失败: {str(e)}")
+
+
+@router.post("/realtime")
+async def detect_realtime_image(
+    image_base64: str = Form(...),
+    conf_threshold: Optional[float] = Form(0.5),
+    iou_threshold: Optional[float] = Form(0.45)
+):
+    """
+    实时图像检测接口
+
+    接收base64编码的图像，返回检测结果
+
+    - **image_base64**: base64编码的图像数据
+    - **conf_threshold**: 置信度阈值（默认0.5）
+    - **iou_threshold**: IOU阈值（默认0.45）
+    """
+    try:
+        image_data = base64.b64decode(image_base64)
+        image_bytes = io.BytesIO(image_data)
+
+        temp_file_path = Paths.temp() / f"realtime_{str(uuid.uuid4())[:8]}.jpg"
+        with open(temp_file_path, "wb") as f:
+            f.write(image_bytes.getvalue())
+
+        logger.debug(f"接收到实时检测图像，大小: {len(image_data)} bytes")
+
+        result = detection_service.detect_image(
+            str(temp_file_path),
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold
+        )
+
+        cleanup_file(temp_file_path)
+
+        boxes_data = []
+        for box in result.boxes:
+            boxes_data.append({
+                "x1": box.x1,
+                "y1": box.y1,
+                "x2": box.x2,
+                "y2": box.y2,
+                "confidence": box.confidence,
+                "class_id": box.class_id,
+                "class_name": box.class_name,
+                "chinese_name": box.chinese_name,
+                "color": get_color_for_class(box.class_id)
+            })
+
+        return {
+            "success": True,
+            "message": "检测成功",
+            "data": {
+                "total_objects": result.total_objects,
+                "detection_time": result.detection_time,
+                "model_name": result.model_name,
+                "boxes": boxes_data
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"实时检测失败: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"实时检测失败: {str(e)}"
+        )
+
+
+@router.post("/batch")
+async def detect_batch(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    model_name: Optional[str] = Form(None),
+    conf_threshold: Optional[float] = Form(0.5),
+    iou_threshold: Optional[float] = Form(0.45)
+):
+    """
+    批量图像检测接口
+
+    上传多张PCB图像，返回批量检测结果
+
+    - **files**: PCB图像文件列表（最多50张）
+    - **model_name**: 模型名称（可选，默认使用当前模型）
+    - **conf_threshold**: 置信度阈值（默认0.5）
+    - **iou_threshold**: IOU阈值（默认0.45）
+    """
+    try:
+        if len(files) > 50:
+            raise HTTPException(
+                status_code=400,
+                detail="最多支持50张图像同时检测"
+            )
+
+        Paths.ensure_dir(Paths.uploads())
+
+        if model_name:
+            model_info = model_manager.get_model(model_name)
+            if not model_info:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"模型不存在: {model_name}"
+                )
+
+            current_model = model_manager.get_current_model()
+            if not current_model or current_model.name != model_name:
+                success = model_manager.set_current_model(model_name)
+                if success:
+                    detection_service.load_model(model_info.path)
+
+        results = []
+        for idx, file in enumerate(files):
+            file_path = Paths.uploads() / f"batch_{idx}_{file.filename}"
+            
+            try:
+                content = await file.read()
+                with open(file_path, "wb") as buffer:
+                    buffer.write(content)
+
+                logger.info(f"处理图像 {idx + 1}/{len(files)}: {file.filename}")
+
+                result = detection_service.detect_image(
+                    str(file_path),
+                    conf_threshold=conf_threshold,
+                    iou_threshold=iou_threshold
+                )
+
+                background_tasks.add_task(cleanup_file, file_path)
+
+                result_data = {
+                    "detection_id": result.detection_id,
+                    "image_url": f"/api/detection/files/{result.image_path}",
+                    "result_image_url": f"/api/detection/files/{result.result_image_path}",
+                    "boxes": [
+                        {
+                            "x1": box.x1,
+                            "y1": box.y1,
+                            "x2": box.x2,
+                            "y2": box.y2,
+                            "confidence": box.confidence,
+                            "class_id": box.class_id,
+                            "class_name": box.class_name,
+                            "chinese_name": box.chinese_name,
+                            "color": get_color_for_class(box.class_id)
+                        }
+                        for box in result.boxes
+                    ],
+                    "total_objects": result.total_objects,
+                    "detection_time": result.detection_time,
+                    "model_name": result.model_name,
+                    "created_at": result.created_at
+                }
+
+                results.append({
+                    "filename": file.filename,
+                    "success": True,
+                    "result": result_data,
+                    "error": None
+                })
+
+            except Exception as e:
+                logger.error(f"处理图像失败 {file.filename}: {str(e)}")
+                results.append({
+                    "filename": file.filename,
+                    "success": False,
+                    "result": None,
+                    "error": str(e)
+                })
+
+        success_count = sum(1 for r in results if r["success"])
+        failed_count = len(results) - success_count
+
+        return {
+            "success": True,
+            "message": f"批量检测完成：成功 {success_count} 张，失败 {failed_count} 张",
+            "data": {
+                "total": len(results),
+                "success": success_count,
+                "failed": failed_count,
+                "items": results
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量检测失败: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"批量检测失败: {str(e)}"
+        )

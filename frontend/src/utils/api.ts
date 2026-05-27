@@ -5,12 +5,16 @@ import type {
   TargetListResponse,
   ModelListResponse,
   CurrentModelResponse,
-  DetectionStatsResponse
+  DetectionStatsResponse,
+  VideoDetectionResponse
 } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 120000
+  timeout: 120000,
+  headers: {
+    'Accept': 'application/json'
+  }
 })
 
 api.interceptors.response.use(
@@ -28,23 +32,43 @@ export const detectionApi = {
     if (modelName) {
       formData.append('model_name', modelName)
     }
-    const response = await api.post('/detection/single', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
+    const response = await api.post('/detection/single', formData)
     return response.data
   },
 
   detectBatch: async (files: File[], modelName?: string): Promise<BatchDetectionResponse> => {
     const formData = new FormData()
-    files.forEach((file, index) => {
-      formData.append(`file_${index}`, file)
+    files.forEach((file) => {
+      formData.append('files', file)
     })
     if (modelName) {
       formData.append('model_name', modelName)
     }
-    const response = await api.post('/detection/batch', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
+    const response = await api.post('/detection/batch', formData)
+    return response.data
+  },
+
+  detectRealtime: async (
+    imageBase64: string,
+    confThreshold: number = 0.5,
+    iouThreshold: number = 0.45
+  ) => {
+    const formData = new FormData()
+    formData.append('image_base64', imageBase64)
+    formData.append('conf_threshold', confThreshold.toString())
+    formData.append('iou_threshold', iouThreshold.toString())
+    
+    const response = await api.post('/detection/realtime', formData)
+    return response.data
+  },
+
+  detectVideo: async (file: File, modelName?: string): Promise<VideoDetectionResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (modelName) {
+      formData.append('model_name', modelName)
+    }
+    const response = await api.post('/detection/video', formData)
     return response.data
   },
 
@@ -75,8 +99,10 @@ export const modelApi = {
     return response.data
   },
 
-  switch: async (modelName: string): Promise<CurrentModelResponse> => {
-    const response = await api.post('/detection/models/switch', { model_name: modelName })
+  switchModel: async (modelName: string): Promise<CurrentModelResponse> => {
+    const formData = new FormData()
+    formData.append('model_name', modelName)
+    const response = await api.post('/detection/models/switch', formData)
     return response.data
   }
 }

@@ -191,6 +191,16 @@ class Paths:
         return cls.backend() / "data"
     
     @classmethod
+    def temp(cls) -> Path:
+        """
+        获取临时文件目录
+        
+        Returns:
+            Path: temp 目录路径
+        """
+        return cls.backend() / "temp"
+    
+    @classmethod
     def config(cls) -> Path:
         """
         获取配置文件目录
@@ -236,6 +246,7 @@ class Paths:
             cls.models(),
             cls.logs(),
             cls.data(),
+            cls.temp(),
         ]
         
         created_dirs = []

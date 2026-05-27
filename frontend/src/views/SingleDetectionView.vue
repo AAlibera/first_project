@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { Upload, Camera, RefreshCw, Check, Clock, AlertTriangle, X } from 'lucide-vue-next'
-import { detectionApi } from '@/utils/api'
-import type { DetectionResult, DetectionBox } from '@/types'
+import { ref, computed, onMounted } from 'vue'
+import { Upload, Camera, RefreshCw, Check, Clock, AlertTriangle, X, Database } from 'lucide-vue-next'
+import { detectionApi, modelApi } from '@/utils/api'
+import type { DetectionResult, DetectionBox, ModelItem } from '@/types'
+
+const currentModelName = ref<string>('')
+const availableModels = ref<ModelItem[]>([])
+const selectedModel = ref<string>('')
 
 const selectedFile = ref<File | null>(null)
 const previewUrl = ref('')
@@ -68,11 +72,25 @@ const handleImageLoad = () => {
 const performDetection = async () => {
   if (!selectedFile.value) return
 
+  if (selectedModel.value && selectedModel.value !== currentModelName.value) {
+    try {
+      await modelApi.switchModel(selectedModel.value)
+      const currentResponse = await modelApi.getCurrent()
+      if (currentResponse.success && currentResponse.data) {
+        currentModelName.value = currentResponse.data.name
+      }
+    } catch (error) {
+      console.error('切换模型失败:', error)
+      errorMessage.value = '切换模型失败'
+      return
+    }
+  }
+
   isDetecting.value = true
   errorMessage.value = ''
 
   try {
-    const response = await detectionApi.detectSingle(selectedFile.value)
+    const response = await detectionApi.detectSingle(selectedFile.value, selectedModel.value || undefined)
 
     if (response.success && response.data) {
       result.value = response.data
@@ -95,6 +113,27 @@ const clearSelection = () => {
   errorMessage.value = ''
   detectedBoxes.value = []
 }
+
+const loadModels = async () => {
+  try {
+    const response = await modelApi.getList()
+    if (response.success && response.data) {
+      availableModels.value = response.data
+    }
+
+    const currentResponse = await modelApi.getCurrent()
+    if (currentResponse.success && currentResponse.data) {
+      currentModelName.value = currentResponse.data.name
+      selectedModel.value = currentResponse.data.name
+    }
+  } catch (error) {
+    console.error('加载模型列表失败:', error)
+  }
+}
+
+onMounted(() => {
+  loadModels()
+})
 
 const getBoxStyle = (box: DetectionBox) => {
   const scaleX = (boxContainerRef.value?.clientWidth || 400) / imageWidth.value
@@ -205,8 +244,31 @@ const getBoxLabelStyle = (box: DetectionBox) => {
           </div>
         </div>
 
-        <div class="card p-6">
-          <h2 class="text-lg font-semibold text-white mb-6">检测结果</h2>
+        <div class="space-y-6">
+          <div class="card p-6">
+            <h2 class="text-lg font-semibold text-white mb-6 flex items-center space-x-2">
+              <Database class="w-5 h-5 text-emerald-400" />
+              <span>模型选择</span>
+            </h2>
+
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm text-slate-400 mb-2">选择检测模型</label>
+                <select
+                  v-model="selectedModel"
+                  class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-emerald-500"
+                >
+                  <option v-for="model in availableModels" :key="model.name" :value="model.name">
+                    {{ model.name }}
+                  </option>
+                </select>
+                <p class="text-xs text-slate-500 mt-2">当前使用: {{ currentModelName || '未加载' }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card p-6">
+            <h2 class="text-lg font-semibold text-white mb-6">检测结果</h2>
 
           <div v-if="!result" class="text-center py-16">
             <div class="w-20 h-20 mx-auto mb-4 bg-slate-700/50 rounded-xl flex items-center justify-center">
@@ -265,6 +327,7 @@ const getBoxLabelStyle = (box: DetectionBox) => {
                 <span>{{ new Date(result.created_at).toLocaleString('zh-CN') }}</span>
               </span>
             </div>
+          </div>
           </div>
         </div>
       </div>

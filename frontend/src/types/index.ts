@@ -82,6 +82,27 @@ export interface CurrentModelResponse {
   data: ModelItem | null
 }
 
+export interface VideoFrameDetection {
+  frame_index: number
+  timestamp: number
+  boxes: DetectionBox[]
+  total_objects: number
+  detection_time: number
+  model_name: string
+}
+
+export interface VideoDetectionResult {
+  total_frames: number
+  processed_frames: number
+  results: VideoFrameDetection[]
+}
+
+export interface VideoDetectionResponse {
+  success: boolean
+  message: string
+  data: VideoDetectionResult | null
+}
+
 export interface DetectionStatsResponse {
   success: boolean
   message: string

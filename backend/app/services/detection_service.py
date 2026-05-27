@@ -98,7 +98,90 @@ class DetectionService:
         CLASS_COLORS: 类别颜色映射表（BGR 格式）
     """
     
-    CLASS_NAMES: Dict[int, tuple] = {
+    COCO_CLASS_NAMES: Dict[int, tuple] = {
+        0: ("person", "人"),
+        1: ("bicycle", "自行车"),
+        2: ("car", "汽车"),
+        3: ("motorcycle", "摩托车"),
+        4: ("airplane", "飞机"),
+        5: ("bus", "公交车"),
+        6: ("train", "火车"),
+        7: ("truck", "卡车"),
+        8: ("boat", "船"),
+        9: ("traffic light", "红绿灯"),
+        10: ("fire hydrant", "消防栓"),
+        11: ("stop sign", "停止标志"),
+        12: ("parking meter", "停车计时器"),
+        13: ("bench", "长椅"),
+        14: ("bird", "鸟"),
+        15: ("cat", "猫"),
+        16: ("dog", "狗"),
+        17: ("horse", "马"),
+        18: ("sheep", "羊"),
+        19: ("cow", "牛"),
+        20: ("elephant", "大象"),
+        21: ("bear", "熊"),
+        22: ("zebra", "斑马"),
+        23: ("giraffe", "长颈鹿"),
+        24: ("backpack", "背包"),
+        25: ("umbrella", "雨伞"),
+        26: ("handbag", "手提包"),
+        27: ("tie", "领带"),
+        28: ("suitcase", "行李箱"),
+        29: ("frisbee", "飞盘"),
+        30: ("skis", "滑雪板"),
+        31: ("snowboard", "滑雪板"),
+        32: ("sports ball", "运动球"),
+        33: ("kite", "风筝"),
+        34: ("baseball bat", "棒球棒"),
+        35: ("baseball glove", "棒球手套"),
+        36: ("skateboard", "滑板"),
+        37: ("surfboard", "冲浪板"),
+        38: ("tennis racket", "网球拍"),
+        39: ("bottle", "瓶子"),
+        40: ("wine glass", "酒杯"),
+        41: ("cup", "杯子"),
+        42: ("fork", "叉子"),
+        43: ("knife", "刀"),
+        44: ("spoon", "勺子"),
+        45: ("bowl", "碗"),
+        46: ("banana", "香蕉"),
+        47: ("apple", "苹果"),
+        48: ("sandwich", "三明治"),
+        49: ("orange", "橙子"),
+        50: ("broccoli", "西兰花"),
+        51: ("carrot", "胡萝卜"),
+        52: ("hot dog", "热狗"),
+        53: ("pizza", "披萨"),
+        54: ("donut", "甜甜圈"),
+        55: ("cake", "蛋糕"),
+        56: ("chair", "椅子"),
+        57: ("couch", "沙发"),
+        58: ("potted plant", "盆栽"),
+        59: ("bed", "床"),
+        60: ("dining table", "餐桌"),
+        61: ("toilet", "厕所"),
+        62: ("tv", "电视"),
+        63: ("laptop", "笔记本电脑"),
+        64: ("mouse", "鼠标"),
+        65: ("remote", "遥控器"),
+        66: ("keyboard", "键盘"),
+        67: ("cell phone", "手机"),
+        68: ("microwave", "微波炉"),
+        69: ("oven", "烤箱"),
+        70: ("toaster", "烤面包机"),
+        71: ("sink", "水槽"),
+        72: ("refrigerator", "冰箱"),
+        73: ("book", "书"),
+        74: ("clock", "时钟"),
+        75: ("vase", "花瓶"),
+        76: ("scissors", "剪刀"),
+        77: ("teddy bear", "泰迪熊"),
+        78: ("hair drier", "吹风机"),
+        79: ("toothbrush", "牙刷"),
+    }
+    
+    PCB_CLASS_NAMES: Dict[int, tuple] = {
         0: ("scratch", "划痕"),
         1: ("crack", "裂纹"),
         2: ("hole", "孔洞"),
@@ -107,15 +190,14 @@ class DetectionService:
         5: ("solder", "焊点异常"),
     }
     
-    CLASS_COLORS: Dict[int, tuple] = {
-        0: (248, 113, 113),
-        1: (251, 146, 60),
-        2: (250, 204, 21),
-        3: (52, 211, 153),
-        4: (56, 189, 248),
-        5: (167, 139, 250),
-    }
-
+    DEFAULT_COLORS: List[tuple] = [
+        (248, 113, 113), (251, 146, 60), (250, 204, 21),
+        (52, 211, 153), (56, 189, 248), (167, 139, 250),
+        (236, 72, 153), (6, 182, 212), (139, 92, 246),
+        (234, 88, 12), (34, 197, 94), (245, 158, 11),
+        (168, 85, 247), (236, 72, 153), (6, 182, 212),
+    ]
+    
     def __init__(self, output_dir: Optional[Path] = None):
         """
         初始化检测服务
@@ -127,6 +209,8 @@ class DetectionService:
         self._model = None
         self._model_name: Optional[str] = None
         self._model_loaded: bool = False
+        self._class_names: Dict[int, tuple] = self.COCO_CLASS_NAMES
+        self._model_is_custom: bool = False
         
         self._stats: Dict[str, Any] = {
             'total_detections': 0,
@@ -154,6 +238,10 @@ class DetectionService:
         """
         加载 YOLO 模型
         
+        根据模型名称自动选择类别映射：
+        - YOLO官方模型（如 yolo11n.pt）使用 COCO 类别（支持人像识别等）
+        - 自定义训练模型（如 best_xxx.pt）使用 PCB 缺陷类别
+        
         Args:
             model_path: 模型文件路径（相对或绝对路径）
         
@@ -171,6 +259,17 @@ class DetectionService:
         if not path.exists():
             logger.error(f"模型文件不存在: {path}")
             return False
+        
+        model_name = path.stem.lower()
+        
+        if 'yolo' in model_name and not ('best' in model_name or 'custom' in model_name):
+            self._class_names = self.COCO_CLASS_NAMES
+            self._model_is_custom = False
+            logger.info(f"检测到 YOLO 官方模型，使用 COCO 类别")
+        else:
+            self._class_names = self.PCB_CLASS_NAMES
+            self._model_is_custom = True
+            logger.info(f"检测到自定义模型，使用 PCB 缺陷类别")
         
         logger.info(f"正在加载模型: {path}")
         
@@ -324,7 +423,7 @@ class DetectionService:
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
             
-            class_name, chinese_name = self.CLASS_NAMES.get(
+            class_name, chinese_name = self._class_names.get(
                 class_id,
                 (f"class_{class_id}", f"未知_{class_id}")
             )
