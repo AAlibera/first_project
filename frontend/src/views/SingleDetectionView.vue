@@ -14,11 +14,7 @@ const isDetecting = ref(false)
 const result = ref<DetectionResult | null>(null)
 const errorMessage = ref('')
 const detectedBoxes = ref<DetectionBox[]>([])
-
-const imageRef = ref<HTMLImageElement | null>(null)
-const boxContainerRef = ref<HTMLDivElement | null>(null)
-const imageWidth = ref(0)
-const imageHeight = ref(0)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const canDetect = computed(() => selectedFile.value && !isDetecting.value)
 
@@ -60,13 +56,6 @@ const handleDrop = (event: DragEvent) => {
 
 const handleDragOver = (event: DragEvent) => {
   event.preventDefault()
-}
-
-const handleImageLoad = () => {
-  if (imageRef.value) {
-    imageWidth.value = imageRef.value.naturalWidth
-    imageHeight.value = imageRef.value.naturalHeight
-  }
 }
 
 const performDetection = async () => {
@@ -114,6 +103,10 @@ const clearSelection = () => {
   detectedBoxes.value = []
 }
 
+const triggerFileInput = () => {
+  fileInputRef.value?.click()
+}
+
 const loadModels = async () => {
   try {
     const response = await modelApi.getList()
@@ -134,27 +127,6 @@ const loadModels = async () => {
 onMounted(() => {
   loadModels()
 })
-
-const getBoxStyle = (box: DetectionBox) => {
-  const scaleX = (boxContainerRef.value?.clientWidth || 400) / imageWidth.value
-  const scaleY = (boxContainerRef.value?.clientHeight || 400) / imageHeight.value
-
-  return {
-    left: `${box.x1 * scaleX}px`,
-    top: `${box.y1 * scaleY}px`,
-    width: `${(box.x2 - box.x1) * scaleX}px`,
-    height: `${(box.y2 - box.y1) * scaleY}px`,
-    borderColor: box.color,
-    backgroundColor: box.color + '20'
-  }
-}
-
-const getBoxLabelStyle = (box: DetectionBox) => {
-  return {
-    backgroundColor: box.color,
-    color: '#0f172a'
-  }
-}
 </script>
 
 <template>
@@ -181,12 +153,12 @@ const getBoxLabelStyle = (box: DetectionBox) => {
           <div
             v-if="!previewUrl"
             class="border-2 border-dashed border-slate-600 rounded-xl p-12 text-center hover:border-emerald-500 transition-colors cursor-pointer"
-            @click="$refs.fileInput?.click()"
+            @click="triggerFileInput"
             @drop="handleDrop"
             @dragover="handleDragOver"
           >
             <input
-              ref="fileInput"
+              ref="fileInputRef"
               type="file"
               accept="image/*"
               class="hidden"
@@ -201,26 +173,13 @@ const getBoxLabelStyle = (box: DetectionBox) => {
 
           <div v-else class="relative">
             <div
-              ref="boxContainer"
               class="relative rounded-xl overflow-hidden bg-slate-900"
             >
               <img
-                ref="imageRef"
                 :src="previewUrl"
                 alt="Preview"
                 class="w-full h-auto"
-                @load="handleImageLoad"
               />
-              <div
-                v-for="(box, index) in detectedBoxes"
-                :key="index"
-                class="detection-box"
-                :style="getBoxStyle(box)"
-              >
-                <div class="detection-label" :style="getBoxLabelStyle(box)">
-                  {{ box.chinese_name }} {{ (box.confidence * 100).toFixed(0) }}%
-                </div>
-              </div>
             </div>
 
             <div class="mt-4 flex items-center space-x-2 text-slate-400 text-sm">

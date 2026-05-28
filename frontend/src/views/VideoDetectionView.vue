@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { 
-  Video, Check, Clock, AlertTriangle, Play, Pause, 
+  Check, Clock, Play, Pause, 
   Upload, Settings, Monitor, Database, StopCircle 
 } from 'lucide-vue-next'
 import FileUploader from '@/components/FileUploader.vue'
@@ -11,7 +11,6 @@ import type { DetectionBox, ModelItem } from '@/types'
 const videoRef = ref<HTMLVideoElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const overlayCanvasRef = ref<HTMLCanvasElement | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const selectedVideoFile = ref<File | null>(null)
 const videoUrl = ref<string>('')
@@ -127,8 +126,11 @@ const drawBoxes = (boxes: DetectionBox[]) => {
   if (boxes.length === 0) return
   
   const videoRect = videoRef.value.getBoundingClientRect()
-  const scaleX = videoRect.width / videoRef.value.videoWidth
-  const scaleY = videoRect.height / videoRef.value.videoHeight
+  const videoWidth = videoRef.value.videoWidth || videoRect.width
+  const videoHeight = videoRef.value.videoHeight || videoRect.height
+  
+  const scaleX = videoRect.width / videoWidth
+  const scaleY = videoRect.height / videoHeight
   
   boxes.forEach(box => {
     const x1 = box.x1 * scaleX
@@ -156,9 +158,26 @@ const drawBoxes = (boxes: DetectionBox[]) => {
 const captureAndDetectFrame = async () => {
   if (!videoRef.value || !canvasRef.value || isProcessing.value || !isVideoLoaded.value) return
   
+  // 等待视频元数据加载
   if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) {
-    console.warn('视频未加载完成，跳过此帧')
-    return
+    console.warn('视频未加载完成，等待中...')
+    // 尝试等待视频准备好
+    await new Promise<void>((resolve) => {
+      const checkVideo = () => {
+        if (videoRef.value && videoRef.value.videoWidth > 0 && videoRef.value.videoHeight > 0) {
+          resolve()
+        } else {
+          setTimeout(checkVideo, 50)
+        }
+      }
+      checkVideo()
+    })
+    
+    // 再次检查，如果还没准备好就跳过
+    if (!videoRef.value.videoWidth || !videoRef.value.videoHeight) {
+      console.warn('视频未加载完成，跳过此帧')
+      return
+    }
   }
   
   isProcessing.value = true
@@ -252,6 +271,18 @@ const startDetection = async () => {
   isDetecting.value = true
   errorMessage.value = ''
   
+  // 等待视频完全准备好
+  await new Promise<void>((resolve) => {
+    const checkReady = () => {
+      if (videoRef.value && videoRef.value.videoWidth > 0 && videoRef.value.videoHeight > 0) {
+        resolve()
+      } else {
+        setTimeout(checkReady, 100)
+      }
+    }
+    checkReady()
+  })
+  
   if (!isPlaying.value) {
     videoRef.value.play()
     isPlaying.value = true
@@ -285,23 +316,25 @@ const stopDetection = () => {
   }
 }
 
-const handleVideoEnded = () => {
-  isPlaying.value = false
-  isPaused.value = true
-  if (isDetecting.value) {
-    stopDetection()
-  }
-}
-
-const handleVideoTimeUpdate = () => {
-  if (videoRef.value) {
-    currentFrameIndex.value = Math.floor(videoRef.value.currentTime * 30)
-  }
+const handleVideoCanPlay = () => {
+  isVideoLoaded.value = true
+  resizeOverlayCanvas()
+  console.log('视频加载成功，可以播放')
 }
 
 const handleVideoLoaded = () => {
+  console.log('视频元数据加载完成', {
+    width: videoRef.value?.videoWidth,
+    height: videoRef.value?.videoHeight
+  })
   isVideoLoaded.value = true
   resizeOverlayCanvas()
+}
+
+const handleVideoError = (event: Event) => {
+  const video = event.target as HTMLVideoElement
+  console.error('视频加载失败:', video.error)
+  errorMessage.value = '视频加载失败，请尝试其他格式（推荐 MP4 格式）'
 }
 
 onMounted(() => {
@@ -354,14 +387,18 @@ onUnmounted(() => {
                 ref="videoRef"
                 :src="videoUrl"
                 class="w-full h-full object-contain"
-                @ended="handleVideoEnded"
-                @timeupdate="handleVideoTimeUpdate"
+                @error="handleVideoError"
+                @canplay="handleVideoCanPlay"
                 @loadedmetadata="handleVideoLoaded"
+                @play="isPlaying = true"
+                @pause="isPlaying = false"
+                crossorigin="anonymous"
+                preload="metadata"
               />
               
               <canvas
                 ref="overlayCanvasRef"
-                class="absolute top-0 left-0 w-full h-full pointer-events-none"
+                class="absolute top-0 left-0 w-full h-full pointer-events-none z-10"
               />
               
               <canvas
@@ -369,7 +406,7 @@ onUnmounted(() => {
                 class="hidden"
               />
 
-              <div v-if="!isPlaying && videoUrl" class="absolute inset-0 flex items-center justify-center bg-black/50">
+              <div v-if="!isPlaying && videoUrl" class="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
                 <button
                   @click="togglePlay"
                   class="w-20 h-20 rounded-full bg-emerald-500/80 hover:bg-emerald-500 flex items-center justify-center transition-all"

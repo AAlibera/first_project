@@ -13,6 +13,62 @@ from dotenv import load_dotenv
 from app.utils.paths import Paths
 
 
+class DatabaseConfig(BaseModel):
+    """
+    PostgreSQL 数据库配置
+    
+    Attributes:
+        host: 数据库服务器地址
+        port: 数据库服务端口
+        username: 数据库用户名
+        password: 数据库密码
+        database: 数据库名称
+    """
+    host: str = Field(
+        default_factory=lambda: os.getenv("DB_HOST", "localhost"),
+        description="数据库服务器地址"
+    )
+    port: int = Field(
+        default_factory=lambda: int(os.getenv("DB_PORT", "5432")),
+        description="数据库服务端口"
+    )
+    username: str = Field(
+        default_factory=lambda: os.getenv("DB_USERNAME", "pcb_user"),
+        description="数据库用户名"
+    )
+    password: str = Field(
+        default_factory=lambda: os.getenv("DB_PASSWORD", "pcb_password"),
+        description="数据库密码"
+    )
+    database: str = Field(
+        default_factory=lambda: os.getenv("DB_DATABASE", "pcb_platform"),
+        description="数据库名称"
+    )
+
+
+class JWTConfig(BaseModel):
+    """
+    JWT 认证配置
+    
+    Attributes:
+        secret_key: JWT 密钥
+        algorithm: 加密算法
+        access_token_expire_minutes: 访问令牌有效期（分钟）
+    """
+    secret_key: str = Field(
+        default_factory=lambda: os.getenv("JWT_SECRET_KEY", "your-super-secret-key-here-change-in-production"),
+        description="JWT 密钥"
+    )
+    algorithm: str = Field(
+        default_factory=lambda: os.getenv("JWT_ALGORITHM", "HS256"),
+        description="加密算法"
+    )
+    access_token_expire_minutes: int = Field(
+        default_factory=lambda: int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")),
+        description="访问令牌有效期（分钟）"
+    )
+
+
 class Settings(BaseModel):
     """
     应用配置类
@@ -27,6 +83,8 @@ class Settings(BaseModel):
         host: 服务监听地址
         port: 服务监听端口
         cors_origins: CORS 允许的源
+        database: 数据库配置
+        jwt: JWT 认证配置
         confidence_threshold: 检测置信度阈值
         iou_threshold: IOU 阈值
         supported_image_formats: 支持的图片格式
@@ -60,6 +118,16 @@ class Settings(BaseModel):
     cors_origins: List[str] = Field(
         default_factory=lambda: os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
         description="CORS 允许的源"
+    )
+    
+    database: DatabaseConfig = Field(
+        default_factory=lambda: DatabaseConfig(),
+        description="数据库配置"
+    )
+    
+    jwt: JWTConfig = Field(
+        default_factory=lambda: JWTConfig(),
+        description="JWT 认证配置"
     )
     
     yolo_model_path: str = Field(

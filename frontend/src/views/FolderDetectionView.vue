@@ -231,9 +231,9 @@ onMounted(() => {
                   </span>
                 </div>
 
-                <div v-if="item.success && item.result?.boxes?.length > 0" class="ml-13 space-y-2">
+                <div v-if="item.success && item.result && item.result.boxes && item.result.boxes.length > 0" class="ml-13 space-y-2">
                   <div
-                    v-for="(box, boxIndex) in item.result.boxes"
+                    v-for="(box, boxIndex) in item.result.boxes!"
                     :key="boxIndex"
                     class="flex items-center justify-between p-2 bg-slate-700/50 rounded-lg"
                   >

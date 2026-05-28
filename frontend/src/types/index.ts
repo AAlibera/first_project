@@ -114,3 +114,63 @@ export interface DetectionStatsResponse {
     last_detection_time: string | null
   }
 }
+
+// 用户相关类型
+export interface User {
+  id: string
+  username: string
+  email: string
+  nickname: string | null
+  avatar_url: string | null
+  role: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Token {
+  access_token: string
+  token_type: string
+  expires_in: number
+}
+
+export interface AuthResponse {
+  success: boolean
+  message: string
+  data: Token | null
+}
+
+export interface UserAuthResponse {
+  success: boolean
+  message: string
+  data: User | null
+}
+
+// 历史记录相关类型
+export interface DetectionRecordItem {
+  id: string
+  type: string
+  status: string
+  model_name: string
+  total_objects: number
+  detection_time: number | null
+  original_image_url: string | null
+  result_image_url: string | null
+  created_at: string
+  boxes: DetectionBox[] | null
+}
+
+export interface DetectionHistoryResponse {
+  success: boolean
+  message: string
+  data: DetectionRecordItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface DetectionRecordDetailResponse {
+  success: boolean
+  message: string
+  data: DetectionRecordItem | null
+}

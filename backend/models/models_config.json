@@ -1,14 +1,14 @@
 {
-  "best": {
-    "name": "best",
-    "path": "backend/models/best.pt",
+  "best__2.2.0": {
+    "name": "best__2.2.0",
+    "path": "backend/models/best__2.2.0.pt",
     "version": "1.0.0",
     "status": "unloaded",
-    "description": "模型文件: best.pt",
-    "created_at": "2026-05-25T01:37:42.977600",
+    "description": "模型文件: best__2.2.0.pt",
+    "created_at": "2026-05-28T02:36:04.870906",
     "metrics": {},
     "config": {},
-    "last_used": "2026-05-25T01:47:59.834895",
+    "last_used": "2026-05-28T02:36:04.878451",
     "class_names": [
       "scratch",
       "crack",
@@ -18,16 +18,16 @@
       "solder"
     ]
   },
-  "best_2.0.0_20260526": {
-    "name": "best_2.0.0_20260526",
-    "path": "backend/models/best_2.0.0_20260526.pt",
+  "best__2.3.0": {
+    "name": "best__2.3.0",
+    "path": "backend/models/best__2.3.0.pt",
     "version": "1.0.0",
     "status": "unloaded",
-    "description": "模型文件: best_2.0.0_20260526.pt",
-    "created_at": "2026-05-26T03:11:02.772981",
+    "description": "模型文件: best__2.3.0.pt",
+    "created_at": "2026-05-28T02:36:04.871490",
     "metrics": {},
     "config": {},
-    "last_used": "2026-05-27T03:25:12.540270",
+    "last_used": null,
     "class_names": [
       "scratch",
       "crack",
@@ -43,10 +43,10 @@
     "version": "1.0.0",
     "status": "unloaded",
     "description": "模型文件: yolo11n.pt",
-    "created_at": "2026-05-27T01:54:40.002804",
+    "created_at": "2026-05-28T02:36:04.872027",
     "metrics": {},
     "config": {},
-    "last_used": "2026-05-27T03:25:31.047715",
+    "last_used": null,
     "class_names": [
       "scratch",
       "crack",

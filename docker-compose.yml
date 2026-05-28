@@ -1,4 +1,26 @@
 services:
+  # PostgreSQL 数据库服务
+  db:
+    image: postgres:15-alpine
+    container_name: pcb-detection-db
+    environment:
+      POSTGRES_USER: pcb_user
+      POSTGRES_PASSWORD: pcb_password
+      POSTGRES_DB: pcb_platform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - pcb-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pcb_user -d pcb_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   backend:
     build:
       context: .
@@ -14,6 +36,17 @@ services:
     environment:
       - PORT=8000
       - HOST=0.0.0.0
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USERNAME=pcb_user
+      - DB_PASSWORD=pcb_password
+      - DB_DATABASE=pcb_platform
+      - JWT_SECRET_KEY=change-this-secret-key-in-production-please-123456
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - pcb-network
@@ -40,3 +73,7 @@ services:
 networks:
   pcb-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

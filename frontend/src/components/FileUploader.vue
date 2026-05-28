@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { Upload, X, FileImage, AlertTriangle } from 'lucide-vue-next'
 
 interface Props {
@@ -28,10 +28,10 @@ const emit = defineEmits<{
 const selectedFiles = ref<File[]>([])
 const isDragging = ref(false)
 const errorMessage = ref('')
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const fileCount = computed(() => selectedFiles.value.length)
 const totalSize = computed(() => selectedFiles.value.reduce((sum, f) => sum + f.size, 0) / (1024 * 1024))
-const isValid = computed(() => fileCount.value > 0 && fileCount.value <= props.maxFiles && totalSize.value <= props.maxSize)
 
 const validateFiles = (files: File[]): boolean => {
   errorMessage.value = ''
@@ -110,6 +110,10 @@ const formatFileSize = (bytes: number): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
+
+const triggerFileInput = () => {
+  fileInputRef.value?.click()
+}
 </script>
 
 <template>
@@ -117,13 +121,13 @@ const formatFileSize = (bytes: number): string => {
     <div
       class="border-2 border-dashed border-slate-600 rounded-xl p-6 text-center transition-all duration-300 cursor-pointer"
       :class="isDragging ? 'border-emerald-500 bg-emerald-500/10' : 'hover:border-emerald-500 hover:bg-slate-700/30'"
-      @click="$refs.fileInput?.click()"
+      @click="triggerFileInput"
       @drop="handleDrop"
       @dragover="handleDragOver"
       @dragleave="handleDragLeave"
     >
       <input
-        ref="fileInput"
+        ref="fileInputRef"
         type="file"
         :multiple="multiple"
         :accept="accept"

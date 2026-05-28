@@ -342,6 +342,20 @@ class DetectionService:
         result_path = self.output_dir / result_filename
         cv2.imwrite(str(result_path), result_image)
         
+        # 确保也保存到 static/results 目录中，以便前端访问
+        static_results_dir = Paths.static() / "results"
+        Paths.ensure_dir(static_results_dir)
+        static_result_path = static_results_dir / result_filename
+        cv2.imwrite(str(static_result_path), result_image)
+        
+        # 同时保存原始图片到 static/uploads
+        static_uploads_dir = Paths.static() / "uploads"
+        Paths.ensure_dir(static_uploads_dir)
+        import shutil
+        static_image_path = static_uploads_dir / path.name
+        if not static_image_path.exists():
+            shutil.copy(str(path), str(static_image_path))
+        
         detection_time = time.time() - start_time
         self._update_stats(len(boxes), detection_time)
         

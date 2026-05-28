@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { Camera, Check, Clock, AlertTriangle, Play, Pause, Video as VideoIcon, Settings, Database } from 'lucide-vue-next'
 import { detectionApi, modelApi } from '@/utils/api'
 import type { ModelItem } from '@/types'
@@ -169,10 +169,14 @@ const drawDetectionBoxes = (boxes: any[]) => {
   const ctx = canvasRef.value.getContext('2d')
   if (!ctx) return
 
+  const rect = videoRef.value.getBoundingClientRect()
+  canvasRef.value.width = rect.width
+  canvasRef.value.height = rect.height
+
   ctx.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
 
-  const scaleX = canvasRef.value.width / videoRef.value.videoWidth
-  const scaleY = canvasRef.value.height / videoRef.value.videoHeight
+  const scaleX = rect.width / videoRef.value.videoWidth
+  const scaleY = rect.height / videoRef.value.videoHeight
 
   boxes.forEach((box: any) => {
     ctx.strokeStyle = box.color || '#f87171'
@@ -192,14 +196,14 @@ const drawDetectionBoxes = (boxes: any[]) => {
 
     ctx.fillRect(
       box.x1 * scaleX,
-      box.y1 * scaleY - 20,
+      Math.max(box.y1 * scaleY - 20, 0),
       labelWidth + 8,
       18
     )
 
     ctx.fillStyle = '#ffffff'
     ctx.globalAlpha = 1
-    ctx.fillText(label, box.x1 * scaleX + 4, box.y1 * scaleY - 5)
+    ctx.fillText(label, box.x1 * scaleX + 4, Math.max(box.y1 * scaleY - 5, 13))
   })
 }
 
@@ -414,7 +418,7 @@ onUnmounted(() => {
                         class="w-8 h-8 rounded-lg flex items-center justify-center text-white font-medium text-sm"
                         :style="{ backgroundColor: box.color + '40', color: box.color }"
                       >
-                        {{ index + 1 }}
+                        {{ Number(index) + 1 }}
                       </div>
                       <div>
                         <div class="text-white text-sm">{{ box.chinese_name }}</div>

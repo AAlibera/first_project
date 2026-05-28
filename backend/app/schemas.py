@@ -3,7 +3,7 @@ PCB缺陷检测系统 - 数据模型和Schema定义
 定义API请求和响应的数据结构
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -150,3 +150,119 @@ class BatchDetectionResponse(BaseModel):
     success: bool = True
     message: str = "批量检测完成"
     data: Optional[BatchDetectionData] = None
+
+
+# ============ 视频检测相关模型 ============
+
+class VideoDetectionData(BaseModel):
+    """视频检测数据"""
+    detection_id: str = Field(..., description="检测ID")
+    video_url: str = Field(..., description="视频URL")
+    total_frames: int = Field(0, description="总帧数")
+    processed_frames: int = Field(0, description="已处理帧数")
+    status: str = Field("processing", description="状态")
+    created_at: str = Field(..., description="创建时间")
+
+
+class VideoDetectionResponse(BaseModel):
+    """视频检测响应"""
+    success: bool = True
+    message: str = "视频检测启动成功"
+    data: Optional[VideoDetectionData] = None
+
+
+# ============ 用户认证相关模型 ============
+
+class UserBase(BaseModel):
+    """用户基础信息"""
+    username: str = Field(..., min_length=3, max_length=50, description="用户名")
+    email: EmailStr = Field(..., description="邮箱")
+
+
+class UserCreate(UserBase):
+    """用户注册请求"""
+    password: str = Field(..., min_length=6, max_length=128, description="密码")
+
+
+class UserLogin(BaseModel):
+    """用户登录请求"""
+    username: str = Field(..., description="用户名或邮箱")
+    password: str = Field(..., description="密码")
+
+
+class UserResponse(UserBase):
+    """用户响应信息"""
+    id: str = Field(..., description="用户ID")
+    nickname: Optional[str] = Field(None, description="昵称")
+    avatar_url: Optional[str] = Field(None, description="头像URL")
+    role: str = Field("user", description="角色")
+    is_active: bool = Field(True, description="是否激活")
+    created_at: datetime = Field(..., description="创建时间")
+    updated_at: datetime = Field(..., description="更新时间")
+
+
+class UserUpdate(BaseModel):
+    """用户信息更新请求"""
+    nickname: Optional[str] = Field(None, max_length=50, description="昵称")
+    avatar_url: Optional[str] = Field(None, description="头像URL")
+    password: Optional[str] = Field(None, min_length=6, max_length=128, description="新密码")
+
+
+class Token(BaseModel):
+    """JWT令牌响应"""
+    access_token: str = Field(..., description="访问令牌")
+    token_type: str = Field("bearer", description="令牌类型")
+    expires_in: int = Field(..., description="过期时间(秒)")
+
+
+class TokenData(BaseModel):
+    """JWT令牌数据"""
+    user_id: Optional[str] = None
+    username: Optional[str] = None
+
+
+class AuthResponse(BaseModel):
+    """认证响应"""
+    success: bool = True
+    message: str = "操作成功"
+    data: Optional[Token] = None
+
+
+class UserAuthResponse(BaseModel):
+    """用户信息响应"""
+    success: bool = True
+    message: str = "获取成功"
+    data: Optional[UserResponse] = None
+
+
+# ============ 历史记录相关模型 ============
+
+class DetectionRecordItem(BaseModel):
+    """检测历史记录项"""
+    id: str = Field(..., description="记录ID")
+    type: str = Field(..., description="检测类型")
+    status: str = Field(..., description="检测状态")
+    model_name: str = Field(..., description="模型名称")
+    total_objects: int = Field(0, description="检测目标数")
+    detection_time: Optional[float] = Field(None, description="检测耗时")
+    original_image_url: Optional[str] = Field(None, description="原始图片URL")
+    result_image_url: Optional[str] = Field(None, description="结果图片URL")
+    created_at: datetime = Field(..., description="创建时间")
+    boxes: Optional[List[DetectionBoxData]] = Field(None, description="检测框列表")
+
+
+class DetectionHistoryResponse(BaseModel):
+    """检测历史列表响应"""
+    success: bool = True
+    message: str = "获取成功"
+    data: List[DetectionRecordItem] = Field(default_factory=list)
+    total: int = Field(0, description="总记录数")
+    page: int = Field(1, description="当前页")
+    page_size: int = Field(20, description="每页数量")
+
+
+class DetectionRecordDetailResponse(BaseModel):
+    """检测记录详情响应"""
+    success: bool = True
+    message: str = "获取成功"
+    data: Optional[DetectionRecordItem] = None
